@@ -104,8 +104,8 @@ def cosyvoice3_example():
 
 def main():
     # cosyvoice_example()
-    # cosyvoice2_example()
-    cosyvoice3_example()
+    cosyvoice2_example()
+    # cosyvoice3_example()
 
 
 if __name__ == '__main__':

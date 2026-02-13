@@ -62,7 +62,7 @@ def spell_out_number(text: str, inflect_parser):
 # 1. per sentence max len token_max_n, min len token_min_n, merge if last sentence len less than merge_len
 # 2. cal sentence len according to lang
 # 3. split sentence according to puncatation
-def split_paragraph(text: str, tokenize, lang="zh", token_max_n=80, token_min_n=60, merge_len=20, comma_split=False):
+def split_paragraph(text: str, tokenize, lang="zh", token_max_n=800, token_min_n=60, merge_len=20, comma_split=False):
     def calc_utt_length(_text: str):
         if lang == "zh":
             return len(_text)

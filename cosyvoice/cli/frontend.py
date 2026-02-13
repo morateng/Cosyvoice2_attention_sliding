@@ -154,7 +154,7 @@ class CosyVoiceFrontEnd:
                 if self.text_frontend == 'wetext':
                     text = self.en_tn_model.normalize(text)
                 text = spell_out_number(text, self.inflect_parser)
-                texts = list(split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "en", token_max_n=80,
+                texts = list(split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "en", token_max_n=800,
                                              token_min_n=60, merge_len=20, comma_split=False))
         texts = [i for i in texts if not is_only_punctuation(i)]
         return texts if split is True else text

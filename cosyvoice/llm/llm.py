@@ -239,11 +239,12 @@ class Qwen2Encoder(torch.nn.Module):
         )
         return outs.hidden_states[-1], masks.unsqueeze(1)
 
-    def forward_one_step(self, xs, masks, cache=None):
+    def forward_one_step(self, xs, masks, cache=None, position_ids=None):
         input_masks = masks[:, -1, :]
         outs = self.model(
             inputs_embeds=xs,
             attention_mask=input_masks,
+            position_ids=position_ids,
             output_hidden_states=True,
             return_dict=True,
             use_cache=True,
@@ -252,6 +253,19 @@ class Qwen2Encoder(torch.nn.Module):
         xs = outs.hidden_states[-1]
         new_cache = outs.past_key_values
         return xs, new_cache
+
+
+def _trim_kv_cache(cache, prompt_len, window_size):
+    """KV cache에서 prompt 영역과 최근 window_size 토큰만 유지"""
+    for i in range(len(cache.key_cache)):
+        cache.key_cache[i] = torch.cat([
+            cache.key_cache[i][:, :, :prompt_len, :],
+            cache.key_cache[i][:, :, -window_size:, :]
+        ], dim=2)
+        cache.value_cache[i] = torch.cat([
+            cache.value_cache[i][:, :, :prompt_len, :],
+            cache.value_cache[i][:, :, -window_size:, :]
+        ], dim=2)
 
 
 class Qwen2LM(TransformerLM):
@@ -293,7 +307,10 @@ class Qwen2LM(TransformerLM):
         self.sampling = sampling
         self.mix_ratio = mix_ratio
 
-        # 5. vllm related
+        # 5. sliding window attention
+        self.attention_window_size = 64
+
+        # 6. vllm related
         self.stop_token_ids = [speech_token_size + i for i in range(3)]
         self.vllm_output_queue = {}
         if online_feature is True:
@@ -535,12 +552,34 @@ class Qwen2LM(TransformerLM):
         else:
             out_tokens = []
             cache = None
+            prompt_len = None
+            window_size = self.attention_window_size
+            if not hasattr(self, '_token_times'):
+                self._token_times = []
             for i in range(max_len):
+                if prompt_len is not None:
+                    position_ids = torch.tensor([[prompt_len + i]], device=lm_input.device, dtype=torch.long)
+                else:
+                    position_ids = None
+                torch.cuda.synchronize() if lm_input.is_cuda else None
+                t0 = time.time()
                 y_pred, cache = self.llm.forward_one_step(lm_input,
                                                           masks=torch.tril(torch.ones((1, lm_input.shape[1], lm_input.shape[1]), device=lm_input.device)).to(torch.bool),
-                                                          cache=cache)
+                                                          cache=cache,
+                                                          position_ids=position_ids)
+                if prompt_len is None:
+                    prompt_len = cache.get_seq_length()
+                if window_size is not None:
+                    cache_len = cache.get_seq_length()
+                    if cache_len > prompt_len + window_size:
+                        _trim_kv_cache(cache, prompt_len, window_size)
                 logp = self.llm_decoder(y_pred[:, -1]).log_softmax(dim=-1)
                 top_ids = self.sampling_ids(logp.squeeze(dim=0), out_tokens, sampling, ignore_eos=True if i < min_len else False)
+                torch.cuda.synchronize() if lm_input.is_cuda else None
+                elapsed = time.time() - t0
+                if i > 0:
+                    self._token_times.append(elapsed)
+                logging.info('token {:4d} | cache_len {:5d} | {:.4f}s'.format(i, cache.get_seq_length(), elapsed))
                 if top_ids in self.stop_token_ids:
                     break
                 # in stream mode, yield token one by one
